@@ -8,7 +8,8 @@
 # Defaults for configurable values, expected to be set by command-line arguments
 AUTOSYNC="no"
 COLOR_MUTED="%{F#6b6b6b}"
-ICON_MUTED=
+ICON_MUTED="audio-volume-muted-symbolic"
+IFS=, read -r -a ICONS_VOLUME <<< "audio-volume-low-symbolic,audio-volume-medium-symbolic,audio-volume-high-symbolic"
 ICON_SINK=
 NOTIFICATIONS="no"
 OSD="no"
@@ -58,7 +59,7 @@ function getSinkName() {
 function getNickname() {
     getSinkName "$1"
     unset SINK_NICKNAME
-
+    # echo "DEBUG: in getNickname(): sinkName is ${sinkName}; portName is ${portName}; indexed nick is ${SINK_NICKNAMES[$sinkName/$portName]} "
     if [ -n "$sinkName" ] && [ -n "$portName" ] && [ -n "${SINK_NICKNAMES[$sinkName/$portName]}" ]; then
         SINK_NICKNAME="${SINK_NICKNAMES[$sinkName/$portName]}"
     elif [ -n "$sinkName" ] && [ -n "${SINK_NICKNAMES[$sinkName]}" ]; then
@@ -122,6 +123,42 @@ function getSinkInputs() {
 }
 
 
+function notify() {
+    NOTIFICATIONS=yes # notify always
+    if ! getCurSink; then
+        echo "PulseAudio not running"
+        return 1
+    fi
+    if [ "$1" = "volume" ]; then
+        getIsMuted "$curSink"
+        getCurVol "$curSink"
+        # if [ "$IS_MUTED" = "yes" ]; then
+        #     pactl set-sink-mute "$curSink" "no"
+        # else
+        #     pactl set-sink-mute "$curSink" "yes"
+        # fi
+    fi
+    if [ $NOTIFICATIONS = "yes" ]; then
+        getNickname $curSink
+        # getNicknameFromProp "device.description" $curSink
+        # if command -v dunstify &>/dev/null; then
+        #     notify="dunstify --replace 201839192"
+        # else
+            notify="notify-send -c moozic"
+        # fi
+            if [ "${IS_MUTED}" = "yes" ]; then
+                myicon=${ICON_MUTED}
+            else
+                getVolumeIcon
+                myicon=${VOL_ICON:audio-volume-high-symbolic}
+            fi
+            # $notify "PulseAudio" "Volume ${VOL_LEVEL}" --icon=${myicon} --hint="string:x-canonical-private-synchronous:music" &
+            $notify "${SINK_NICKNAME:-Audio}" "Volume ${VOL_LEVEL}" --icon=${myicon} --hint="string:x-canonical-private-synchronous:music" &
+
+    fi
+
+}
+
 function volUp() {
     # Obtaining the current volume from pulseaudio into $VOL_LEVEL.
     if ! getCurSink; then
@@ -130,7 +167,7 @@ function volUp() {
     fi
     getCurVol "$curSink"
     local maxLimit=$((VOLUME_MAX - VOLUME_STEP))
-
+    # echo "DEBUG: curSink: ${curSink}, curVol=${VOL_LEVEL}"
     # Checking the volume upper bounds so that if VOLUME_MAX was 100% and the
     # increase percentage was 3%, a 99% volume would top at 100% instead
     # of 102%. If the volume is above the maximum limit, nothing is done.
@@ -309,6 +346,30 @@ function listen() {
 }
 
 
+function getVolumeIcon {
+    if ! getCurSink; then
+        echo "PulseAudio not running"
+        return 1
+    fi
+    getCurVol "$curSink"
+    getIsMuted "$curSink"
+
+    # Fixed volume icons over max volume
+    local iconsLen=${#ICONS_VOLUME[@]}
+    if [ "$iconsLen" -ne 0 ]; then
+        local volSplit=$((VOLUME_MAX / iconsLen))
+        for i in $(seq 1 "$iconsLen"); do
+            if [ $((i * volSplit)) -ge "$VOL_LEVEL" ]; then
+                VOL_ICON="${ICONS_VOLUME[$((i-1))]}"
+                break
+            fi
+        done
+    else
+        VOL_ICON=""
+    fi
+
+}
+
 function output() {
     if ! getCurSink; then
         echo "PulseAudio not running"
@@ -428,22 +489,25 @@ More info on GitHub:
 }
 
 while [[ "$1" = --* ]]; do
+    # echo "Debug: processing arg |${1}"
     unset arg
     unset val
     if [[ "$1" = *=* ]]; then
         arg="${1//=*/}"
         val="${1//*=/}"
         shift
+        # echo "Debug: we shifted at the mysterious star=star; our next arg is now |${1}|"
     else
         arg="$1"
         # Support space-separated values, but also value-less flags
         if [[ "$2" != --* ]]; then
             val="$2"
             shift
+            # echo "Debug: we shifted for ~= --star ; our next arg is now |${1}|"
         fi
         shift
+        # echo "Debug: we shifted for some other reason ; our next arg is now |${1}|"
     fi
-
     case "$arg" in
         --autosync)
             AUTOSYNC=yes
@@ -456,6 +520,7 @@ while [[ "$1" = --* ]]; do
             ;;
         --notifications)
             NOTIFICATIONS=yes
+            # echo "DEBUG: notifications turned on "
             ;;
         --no-notifications)
             NOTIFICATIONS=no
@@ -506,22 +571,27 @@ while [[ "$1" = --* ]]; do
             ;;
     esac
 done
-
+# echo "DEBUG: What should be our one and only argument remaining is |${1}|"
 case "$1" in
     up)
         volUp
+        notify volume
         ;;
     down)
         volDown
+        notify volume
         ;;
     togmute)
         volMute toggle
+        notify volume
         ;;
     mute)
         volMute mute
+        notify volume
         ;;
     unmute)
         volMute unmute
+        notify volume
         ;;
     sync)
         volSync
